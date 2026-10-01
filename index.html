@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
+<title>Housey - Tambola Caller</title>
+<meta name="description" content="Scan Housie/Tambola tickets and run the number caller for game night.">
+
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#7c3aed">
+<link rel="icon" href="icons/favicon-32.png" sizes="32x32">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Housey">
+
+<link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+<header class="app-header">
+  <div class="brand"><span class="ball">H</span> Housey</div>
+  <div class="header-actions">
+    <button id="btn-install" class="icon-btn hidden" type="button">Install app</button>
+    <button id="btn-new-game" class="icon-btn hidden" type="button">New game</button>
+  </div>
+</header>
+
+<main>
+  <!-- ===================== SETUP SCREEN ===================== -->
+  <section id="screen-setup">
+    <p class="screen-title">Upload each player's ticket photo, check the numbers, then start the game.</p>
+
+    <div class="card">
+      <h2>Add a ticket</h2>
+      <p class="hint">Take or upload a clear, flat photo of one Housie/Tambola ticket.</p>
+      <div class="upload-row">
+        <label class="btn btn-primary" for="file-input">📷 Upload ticket photo</label>
+        <input id="file-input" type="file" accept="image/*" capture="environment">
+      </div>
+
+      <div id="ocr-progress" class="ocr-progress hidden">
+        <span id="ocr-progress-label">Reading image…</span>
+        <div class="bar"><div id="ocr-progress-bar"></div></div>
+      </div>
+
+      <div id="scan-result" class="hidden">
+        <div class="ticket-name-row">
+          <input id="ticket-name-input" type="text" placeholder="Player name (e.g. Priya)">
+        </div>
+        <div id="scan-grid" class="ticket-grid"></div>
+        <p class="hint" style="margin-top:10px;">Tap any box to fix a misread number. Leave blanks empty.</p>
+        <div class="ticket-card-actions">
+          <button id="btn-rescan" class="btn btn-sm" type="button">Re-scan photo</button>
+          <button id="btn-save-ticket" class="btn btn-primary btn-sm" type="button">Save ticket</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="ticket-list-card" class="card hidden">
+      <h2>Tickets in this game</h2>
+      <div id="ticket-list" class="ticket-list"></div>
+    </div>
+
+    <button id="btn-start-game" class="btn btn-primary btn-block" type="button" disabled>Start game →</button>
+  </section>
+
+  <!-- ===================== GAME SCREEN ===================== -->
+  <section id="screen-game" class="hidden">
+    <div class="mode-tabs">
+      <button id="tab-host" class="active" type="button">Host controls</button>
+      <button id="tab-presentation" type="button">Presentation mode</button>
+    </div>
+
+    <div class="card">
+      <div class="caller">
+        <div id="caller-ball" class="caller-ball">–</div>
+        <div class="caller-meta">
+          <div class="label">Numbers called: <span id="called-count">0</span> / 90</div>
+          <div id="caller-history" class="caller-history"></div>
+        </div>
+      </div>
+
+      <div class="call-controls host-only">
+        <button id="btn-call-next" class="btn btn-primary" type="button">Call next number</button>
+        <button id="btn-undo" class="btn" type="button">Undo</button>
+        <div class="spacer"></div>
+        <label class="auto-call-control">
+          <input type="checkbox" id="chk-auto-call"> Auto-call every
+          <select id="auto-call-rate">
+            <option value="2000">2s</option>
+            <option value="3000" selected>3s</option>
+            <option value="5000">5s</option>
+          </select>
+        </label>
+      </div>
+    </div>
+
+    <div class="card host-panel host-only">
+      <div class="host-flag">🔒 Host only, hidden in presentation mode</div>
+      <p class="hint">Arm a prize to secretly steer it to a chosen ticket once the genuine random draws below have happened. For free, no-stakes games with friends only.</p>
+
+      <div class="decoy-setting">
+        <label for="decoy-count">Genuine random draws before any fix:</label>
+        <input id="decoy-count" type="number" min="0" max="20" value="2">
+      </div>
+
+      <div id="rig-rows"></div>
+
+      <div id="forced-preview" class="forced-next hidden"></div>
+    </div>
+
+    <div class="card">
+      <h2>Prizes</h2>
+      <div id="prize-tracker" class="prize-tracker"></div>
+    </div>
+
+    <div class="card">
+      <h2>Board</h2>
+      <div id="board" class="board"></div>
+    </div>
+
+    <div class="card">
+      <h2>Tickets</h2>
+      <div id="game-tickets" class="game-tickets"></div>
+    </div>
+  </section>
+
+  <footer class="hint-footer">Free, friendly-game tool only: no money or real prizes, please.</footer>
+</main>
+
+<canvas id="confetti-canvas"></canvas>
+<div id="toast"></div>
+
+<script type="module" src="js/app.js"></script>
+</body>
+</html>
