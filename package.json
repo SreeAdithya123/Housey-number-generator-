@@ -1,0 +1,9 @@
+{
+  "name": "housey-number-generator",
+  "private": true,
+  "description": "Housey - Tambola/Housie ticket scanner and number caller (static site, no build step).",
+  "scripts": {
+    "build": "echo 'Nothing to build: this is a plain static site served as-is.'",
+    "start": "npx --yes serve ."
+  }
+}
