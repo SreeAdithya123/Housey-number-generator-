@@ -36,7 +36,7 @@
       <p class="hint">Take or upload a clear, flat photo of one Housie/Tambola ticket.</p>
       <div class="upload-row">
         <label class="btn btn-primary" for="file-input">📷 Upload ticket photo</label>
-        <input id="file-input" type="file" accept="image/*" capture="environment">
+        <input id="file-input" type="file" accept="image/*">
       </div>
 
       <div id="ocr-progress" class="ocr-progress hidden">
@@ -48,6 +48,7 @@
         <div class="ticket-name-row">
           <input id="ticket-name-input" type="text" placeholder="Player name (e.g. Priya)">
         </div>
+        <p id="scan-note" class="scan-note hidden"></p>
         <div id="scan-grid" class="ticket-grid"></div>
         <p class="hint" style="margin-top:10px;">Tap any box to fix a misread number. Leave blanks empty.</p>
         <div class="ticket-card-actions">

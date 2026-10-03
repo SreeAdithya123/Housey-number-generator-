@@ -229,6 +229,24 @@ main {
 
 .ticket-cell.empty { background: transparent; }
 
+.ticket-cell.warn {
+  background: rgba(245, 158, 11, 0.22);
+  box-shadow: inset 0 0 0 2px var(--host);
+}
+
+.scan-note {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  font-size: 13px;
+  line-height: 1.4;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+}
+
+.scan-note.ok { border-color: rgba(52, 211, 153, 0.45); }
+.scan-note.warn { border-color: rgba(245, 158, 11, 0.55); }
+
 .ticket-cell.matched {
   background: var(--accent);
   color: #fff;

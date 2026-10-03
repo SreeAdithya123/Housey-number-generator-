@@ -1,6 +1,7 @@
 {
   "name": "housey-number-generator",
   "private": true,
+  "type": "module",
   "description": "Housey - Tambola/Housie ticket scanner and number caller (static site, no build step).",
   "scripts": {
     "build": "echo 'Nothing to build: this is a plain static site served as-is.'",

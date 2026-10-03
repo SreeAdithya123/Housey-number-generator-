@@ -5,7 +5,7 @@
 const ROWS = 3;
 const COLS = 9;
 
-export function buildEditableGrid(grid) {
+export function buildEditableGrid(grid, flags = []) {
   const el = document.createElement('div');
   el.className = 'ticket-grid';
   for (let r = 0; r < ROWS; r++) {
@@ -19,8 +19,17 @@ export function buildEditableGrid(grid) {
       input.dataset.col = String(c);
       const v = grid[r][c];
       input.value = v == null ? '' : String(v);
+
+      const flag = flags.find((f) => f.row === r && f.col === c);
+      if (flag) {
+        input.classList.add('warn');
+        input.title = flag.reason;
+      }
+
       input.addEventListener('input', () => {
         input.value = input.value.replace(/[^0-9]/g, '').slice(0, 2);
+        input.classList.remove('warn');
+        input.removeAttribute('title');
       });
       el.appendChild(input);
     }

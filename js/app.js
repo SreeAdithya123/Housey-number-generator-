@@ -35,11 +35,35 @@ function setProgress(frac, label) {
   el('ocr-progress-label').textContent = label;
 }
 
-function renderScanGrid(grid) {
+function renderScanGrid(grid, flags = []) {
   const container = el('scan-grid');
   container.innerHTML = '';
-  currentScanGridEl = buildEditableGrid(grid);
+  currentScanGridEl = buildEditableGrid(grid, flags);
   container.appendChild(currentScanGridEl);
+}
+
+function showScanNote(text, tone) {
+  const note = el('scan-note');
+  note.textContent = text;
+  note.className = `scan-note ${tone}`;
+}
+
+function describeScan({ source, model, fallbackReason, flags, notes }) {
+  const parts = [];
+  if (source === 'ai') {
+    const label = model ? model.split('/').pop().replace(':free', '') : 'AI model';
+    parts.push(`Read by AI (${label}).`);
+  } else {
+    parts.push(`${fallbackReason} Used basic offline OCR instead, which often misreads numbers.`);
+  }
+  if (flags.length) {
+    parts.push(flags.length === 1 ? '1 highlighted box looks wrong.' : `${flags.length} highlighted boxes look wrong.`);
+  }
+  parts.push(...notes);
+  parts.push('Check every number against your ticket before saving.');
+
+  const clean = source === 'ai' && flags.length === 0 && notes.length === 0;
+  showScanNote(parts.join(' '), clean ? 'ok' : 'warn');
 }
 
 async function runScan(file) {
@@ -47,11 +71,13 @@ async function runScan(file) {
   el('scan-result').classList.add('hidden');
   setProgress(0, 'Starting...');
   try {
-    const { grid } = await scanTicketImage(file, setProgress);
-    renderScanGrid(grid);
+    const result = await scanTicketImage(file, setProgress);
+    renderScanGrid(result.grid, result.flags);
+    describeScan(result);
   } catch (err) {
-    showToast(err.message || 'Could not read that photo, fix the grid by hand below.', 3200);
+    showToast(err.message || 'Could not read that photo.', 3200);
     renderScanGrid(emptyGrid3x9());
+    showScanNote("Couldn't scan this photo automatically. Type the numbers in from your ticket.", 'warn');
   } finally {
     el('ocr-progress').classList.add('hidden');
     el('scan-result').classList.remove('hidden');
