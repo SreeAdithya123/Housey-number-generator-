@@ -20,10 +20,10 @@ can install to a home screen like a native app.
 3. **Track prizes.** Early Five, Top Line, Middle Line, Bottom Line, and Full
    House are detected automatically and announced with confetti and a sound
    cue as soon as any ticket satisfies them.
-4. **Presentation mode.** Switch the shared screen (a TV, or a second phone
-   everyone can see) into Presentation Mode, which hides all host-only
-   controls. The host keeps running the draw from their own device in Host
-   Controls mode.
+4. **Two roles.** The **admin** runs everything: tickets, scanning, calling
+   numbers, the host controls. **Players** just open the link and watch the
+   presentation view (caller, prizes, board) live on their own phones, with no
+   tickets and no controls. See "Roles and the backend" below.
 
 ## The "fixed winner" feature - read this before using it
 
@@ -47,9 +47,86 @@ into is deceiving them out of money, not a game feature. If you're running a
 stakes game, just don't arm any rig; the caller plays a completely fair,
 unmodified random draw on its own.
 
+## Roles and the backend (Supabase)
+
+| | Admin | Player (guest or signed in) |
+| --- | --- | --- |
+| Caller, prizes, board, live | yes | yes |
+| Tickets and their numbers | yes | **no** |
+| Host controls, armed prizes | yes | **no** |
+| Scan tickets, start, call, undo, new game | yes | no |
+| How they get in | signs in with email and password | opens the link, nothing to sign in |
+
+The game is stored in a Supabase project, and the **database itself** enforces
+the table above (row level security), so it holds even though the project URL
+and publishable key in `js/config.js` are public:
+
+- `game_public`: status, numbers called, prize winners. Anyone can read it
+  (players update live over Supabase Realtime), only an admin can change it.
+- `game_admin`: tickets, armed prizes, settings. Only an admin can read or
+  change it. It is not published to the live channel.
+- `profiles`: each signed-in user's role. Nobody can change a role through the
+  API, not even an admin; you promote the admin once with the SQL below.
+
+Players never receive tickets or the armed prize, only the numbers that were
+called and who won. The code in this repository is public, so the *feature*
+is visible to anyone who reads it; the *configuration* (which ticket is armed)
+is not.
+
+### One-time setup
+
+1. **Run the SQL.** Supabase dashboard -> SQL Editor -> New query -> paste all
+   of `supabase/migrations/20261004000000_roles_and_game_state.sql` -> Run. It
+   is safe to run again.
+2. **Create your admin account.** Dashboard -> Authentication -> Users -> Add
+   user -> Create new user, enter your email and a password, tick **Auto
+   Confirm User**.
+3. **Make it the admin.** In the SQL Editor run this once, with your email:
+
+   ```sql
+   update public.profiles
+      set role = 'admin'
+    where id = (select id from auth.users where lower(email) = lower('YOUR_EMAIL_HERE'));
+   ```
+
+4. **Recommended settings** (Authentication): set the Site URL to your
+   Cloudflare address. Players don't need accounts, so you can switch off new
+   sign-ups once your admin exists (then "Create player account" in the app
+   will say sign-ups are disabled, which is fine).
+5. Redeploy on Cloudflare (a push does it). No new Cloudflare variables are
+   needed: the project URL and publishable key are in `js/config.js`.
+
+Then open the site, tap **Admin sign in**, and you get the full app. Send
+players the plain link.
+
+### How it behaves
+
+- The admin's game is saved as it changes, so reloading the admin page resumes
+  the game (tickets, armed prizes, numbers called).
+- The header shows **Players in sync** (admin) or **Live** (players). If the
+  connection drops the admin can keep playing: the badge changes to **Players
+  not in sync, retrying**, and the latest state is sent when it is back.
+- There is one game at a time. **New game** clears the shared state and sends
+  players back to "Waiting for the host".
+- If two people sign in as admin at once the last write wins, so use one.
+
+### If it isn't working
+
+| What you see | Likely cause |
+| --- | --- |
+| Players stuck on **Reconnecting...** | Supabase project paused (free projects pause after about a week of no use: restore it in the dashboard), wrong URL/key in `js/config.js`, or the SQL was never run |
+| Admin gets "The server refused the update" | The account isn't an admin yet (step 3), or the game rows are missing (step 1) |
+| "permission denied" or "relation does not exist" | The SQL wasn't run in this project |
+| Admin sign-in says wrong email or password | Account not created, or not confirmed (tick Auto Confirm User) |
+| Scanning says "Sign in as admin" | You are viewing as a guest or player |
+
+Supabase's MCP server for this project is configured in `.mcp.json`. To use
+it from Claude Code, run `claude /mcp` in a regular terminal and authenticate
+the `supabase` server once.
+
 ## AI ticket scanning
 
-The browser sends a downscaled copy of the ticket photo to `/api/scan`, a
+Only the admin can scan: the browser sends a downscaled copy of the ticket photo, together with the admin's sign-in token, to `/api/scan`, a
 Cloudflare Pages Function (`functions/api/scan.js`). The function asks a
 vision model on [OpenRouter](https://openrouter.ai) to list the numbers in
 each row, then the app places every number in the column its value belongs to
@@ -153,7 +230,12 @@ css/styles.css     All styling (mobile-first, dark theme)
 js/ocr.js          Ticket photo -> 3x9 grid via /api/scan, plus the status check
 js/ticket-rules.js Housie ticket rules: place numbers by column, flag misreads
 functions/api/scan.js  Cloudflare Function: calls OpenRouter, holds the API key
-js/game.js         Draw pool, prize rules, the decoy-then-forced rig engine
+js/game.js         Draw pool, prize rules, the decoy-then-forced rig engine, restore
+js/backend.js      Supabase: sign in, role, public/admin game state, live updates
+js/config.js       Public Supabase URL and publishable key (no secrets here)
+js/vendor/supabase.js  Local copy of supabase-js (MIT), no CDN
+supabase/migrations/   The SQL that creates roles, tables and security rules
+.mcp.json          Supabase MCP server config for Claude Code
 js/ui.js           DOM helpers: editable/readonly grids, toast, confetti, sound
 js/app.js          Wires everything together, screen/event handling
 manifest.json      PWA metadata (name, icons, standalone display)
@@ -166,11 +248,7 @@ icons/             App icons (plus the source .svg files used to generate them)
 - Scan accuracy depends on photo quality (flat, well-lit, in focus, one ticket
   filling the frame). AI reads are not guaranteed, and the free OpenRouter models can be
   throttled at busy times. Always check the scanned grid before saving a ticket.
-- `/api/scan` is open to anyone who can reach the site and spends your
-  OpenRouter quota. It only accepts same-site requests and small images, which
-  stops casual abuse but is not real authentication.
-- This is a single-device/single-browser experience: ticket and draw state
-  live only in memory for that page session, and resets if you reload. There
-  is no multi-device sync - "Presentation Mode" is meant to be viewed on a
-  second screen mirrored or cast from the host's device, not a separate
-  live connection.
+- `/api/scan` only works for a signed-in admin (the function asks Supabase
+  whether the caller's token belongs to an admin before using any AI quota).
+- Players need an internet connection to follow along live; there is one game
+  at a time; two simultaneous admins would overwrite each other.

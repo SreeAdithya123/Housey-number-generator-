@@ -1,5 +1,6 @@
 import { Game, createTicket, makeId, PRIZE_ORDER, PRIZE_LABELS } from './game.js';
 import { scanTicketImage, checkAiScanner } from './ocr.js';
+import * as backend from './backend.js';
 import {
   buildEditableGrid, readGridFromDom, buildReadonlyGrid, escapeHtml,
   showToast, burstConfetti, playBeep, playFanfare,
@@ -10,6 +11,14 @@ let currentFile = null;
 let currentScanGridEl = null;
 let autoTimer = null;
 
+// 'admin' runs the game and sees everything. 'player' (a signed-in non-admin
+// or a guest) only watches: the caller, prizes and board, never tickets.
+let role = 'player';
+
+// What the caller, board and prize tracker draw, for both roles: the admin's
+// own game turned into this shape, a player's copy of the public database row.
+let view = { status: 'setup', called: [], wins: {}, updatedAt: null };
+
 const el = (id) => document.getElementById(id);
 
 function emptyGrid3x9() {
@@ -19,7 +28,7 @@ function emptyGrid3x9() {
 function showScreen(name) {
   el('screen-setup').classList.toggle('hidden', name !== 'setup');
   el('screen-game').classList.toggle('hidden', name !== 'game');
-  el('btn-new-game').classList.toggle('hidden', name !== 'game');
+  el('btn-new-game').classList.toggle('hidden', name !== 'game' || role !== 'admin');
 }
 
 function setMode(mode) {
@@ -131,6 +140,7 @@ el('btn-save-ticket').addEventListener('click', () => {
 
   renderTicketList();
   el('btn-start-game').disabled = game.tickets.length === 0;
+  syncAdmin();
   showToast(`Saved ${name}'s ticket (${flatCount} numbers).`);
 });
 
@@ -164,6 +174,7 @@ function renderTicketList() {
       game.removeTicket(ticket.id);
       renderTicketList();
       el('btn-start-game').disabled = game.tickets.length === 0;
+      syncAdmin();
     });
     actions.appendChild(removeBtn);
     item.appendChild(actions);
@@ -181,6 +192,8 @@ el('btn-start-game').addEventListener('click', () => {
   setMode('host');
   showScreen('game');
   renderAll();
+  syncAdmin();
+  syncPublic();
 });
 
 el('tab-host').addEventListener('click', () => setMode('host'));
@@ -189,6 +202,7 @@ el('tab-presentation').addEventListener('click', () => setMode('presentation'));
 el('decoy-count').addEventListener('change', (e) => {
   game.setDecoyCount(parseInt(e.target.value, 10) || 0);
   renderForcedPreview();
+  syncAdmin();
 });
 
 // ---------------- Host rig panel ----------------
@@ -249,6 +263,7 @@ function renderRigRows() {
       }
       renderRigRows();
       renderForcedPreview();
+      syncAdmin();
     });
     row.appendChild(btn);
 
@@ -295,10 +310,11 @@ function renderBoard() {
 }
 
 function updateBoard() {
-  const current = game.called[game.called.length - 1];
+  const current = view.called[view.called.length - 1];
+  const called = new Set(view.called);
   el('board').querySelectorAll('.num').forEach((cell) => {
     const n = Number(cell.dataset.n);
-    cell.classList.toggle('called', game.calledSet.has(n));
+    cell.classList.toggle('called', called.has(n));
     cell.classList.toggle('current', n === current);
   });
 }
@@ -310,7 +326,7 @@ function renderPrizeTracker() {
   container.innerHTML = '';
   PRIZE_ORDER.forEach((prizeKey) => {
     const badge = document.createElement('div');
-    const win = game.wins[prizeKey];
+    const win = view.wins[prizeKey];
     badge.className = `prize-badge${win ? ' won' : ''}`;
 
     const name = document.createElement('div');
@@ -320,9 +336,8 @@ function renderPrizeTracker() {
 
     const winner = document.createElement('div');
     if (win) {
-      const ticket = game.tickets.find((t) => t.id === win.ticketId);
       winner.className = 'winner';
-      winner.textContent = `\u{1F3C6} ${ticket ? ticket.name : 'Unknown'}`;
+      winner.textContent = `\u{1F3C6} ${win.name || 'Unknown'}`;
     } else {
       winner.className = 'winner pending';
       winner.textContent = 'Not yet';
@@ -367,13 +382,13 @@ function renderGameTickets() {
 
 function renderCaller() {
   const ball = el('caller-ball');
-  const current = game.called[game.called.length - 1];
+  const current = view.called[view.called.length - 1];
   ball.textContent = current ?? '–';
-  el('called-count').textContent = String(game.called.length);
+  el('called-count').textContent = String(view.called.length);
 
   const history = el('caller-history');
   history.innerHTML = '';
-  game.called.slice().reverse().slice(0, 14).forEach((n) => {
+  view.called.slice().reverse().slice(0, 14).forEach((n) => {
     const span = document.createElement('span');
     span.textContent = String(n);
     history.appendChild(span);
@@ -400,6 +415,7 @@ function doCallNext() {
   playBeep();
   renderAll();
   popBall();
+  syncPublic();
 
   result.newWins.forEach(({ prizeKey, ticket }) => {
     playFanfare();
@@ -419,6 +435,7 @@ el('btn-undo').addEventListener('click', () => {
   stopAutoCall();
   game.undoLast();
   renderAll();
+  syncPublic();
 });
 
 el('chk-auto-call').addEventListener('change', (e) => {
@@ -465,14 +482,41 @@ el('btn-new-game').addEventListener('click', () => {
   el('scan-result').classList.add('hidden');
   setMode('host');
   showScreen('setup');
+  syncAdmin();
+  syncPublic();
 });
 
 // ---------------- Render orchestration ----------------
 
-function renderAll() {
+function viewFromGame() {
+  const wins = {};
+  PRIZE_ORDER.forEach((prizeKey) => {
+    const win = game.wins[prizeKey];
+    if (!win) return;
+    const ticket = game.tickets.find((t) => t.id === win.ticketId);
+    wins[prizeKey] = { name: ticket ? ticket.name : 'Unknown', atCall: win.atCall };
+  });
+  const status = game.finished ? 'finished' : game.started ? 'running' : 'setup';
+  return { status, called: [...game.called], wins, updatedAt: null };
+}
+
+// Players wait on a plain message until the host starts the game.
+function renderWaiting() {
+  const waiting = role === 'player' && view.status === 'setup';
+  el('waiting-card').classList.toggle('hidden', !waiting);
+  document.querySelectorAll('#screen-game .live-card').forEach((card) => card.classList.toggle('hidden', waiting));
+}
+
+function renderPublic() {
   renderCaller();
   updateBoard();
   renderPrizeTracker();
+  renderWaiting();
+}
+
+function renderAll() {
+  view = viewFromGame();
+  renderPublic();
   renderGameTickets();
   renderRigRows();
   renderForcedPreview();
@@ -524,8 +568,259 @@ if ('serviceWorker' in navigator) {
   });
 }
 
-// ---------------- Init ----------------
+// ---------------- Sharing the game with the backend ----------------
 
-showScreen('setup');
-renderTicketList();
-showAiStatus();
+const syncOk = { admin: true, public: true };
+
+function renderSyncStatus() {
+  const badge = el('sync-status');
+  const healthy = role === 'admin' ? syncOk.admin && syncOk.public : syncOk.public;
+  badge.classList.remove('hidden', 'ok', 'warn');
+  badge.classList.add(healthy ? 'ok' : 'warn');
+  if (role === 'admin') badge.textContent = healthy ? 'Players in sync' : 'Players not in sync, retrying';
+  else badge.textContent = healthy ? 'Live' : 'Reconnecting...';
+}
+
+// Sends the latest state to the backend. Calls made while a send is running
+// collapse into one more send of the newest state, and a failed send retries
+// on its own, so a flaky connection never blocks the game.
+function createSyncer(name, buildPayload, send) {
+  let running = false;
+  let again = false;
+  let retry = null;
+
+  const run = async () => {
+    clearTimeout(retry);
+    if (role !== 'admin') return;
+    if (running) {
+      again = true;
+      return;
+    }
+    running = true;
+    try {
+      do {
+        again = false;
+        await send(buildPayload());
+      } while (again);
+      syncOk[name] = true;
+    } catch {
+      syncOk[name] = false;
+      retry = setTimeout(run, 5000);
+    } finally {
+      running = false;
+      renderSyncStatus();
+    }
+  };
+  return run;
+}
+
+function publicPayload() {
+  const current = viewFromGame();
+  const last = current.called[current.called.length - 1];
+  return { status: current.status, called: current.called, current_number: last ?? null, wins: current.wins };
+}
+
+const syncPublic = createSyncer('public', publicPayload, backend.publishPublic);
+const syncAdmin = createSyncer('admin', () => ({
+  tickets: game.tickets,
+  rigs: game.rigs,
+  decoy_count: game.decoyCount,
+}), backend.saveAdmin);
+
+// ---------------- Sign in ----------------
+
+let signedIn = false;
+
+function setAuthMessage(text) {
+  const box = el('auth-message');
+  box.textContent = text || '';
+  box.classList.toggle('hidden', !text);
+}
+
+function setAuthBusy(busy) {
+  ['auth-submit', 'auth-signup', 'auth-cancel'].forEach((id) => { el(id).disabled = busy; });
+}
+
+function openAuth() {
+  setAuthMessage('');
+  el('auth-overlay').classList.remove('hidden');
+  el('auth-email').focus();
+}
+
+function closeAuth() {
+  el('auth-overlay').classList.add('hidden');
+}
+
+async function submitAuth(action) {
+  setAuthBusy(true);
+  setAuthMessage('');
+  try {
+    const message = await action(el('auth-email').value.trim(), el('auth-password').value);
+    if (message) {
+      setAuthMessage(message);
+      setAuthBusy(false);
+      return;
+    }
+    window.location.reload();
+  } catch (err) {
+    setAuthMessage(err.message);
+    setAuthBusy(false);
+  }
+}
+
+el('btn-auth').addEventListener('click', async () => {
+  if (!signedIn) {
+    openAuth();
+    return;
+  }
+  try {
+    await backend.signOut();
+  } catch {
+    // signing out locally below is enough if the server can't be reached
+  }
+  window.location.reload();
+});
+
+el('auth-cancel').addEventListener('click', closeAuth);
+el('auth-form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  submitAuth((email, password) => backend.signIn(email, password).then(() => null));
+});
+el('auth-signup').addEventListener('click', () => {
+  if (!el('auth-form').reportValidity()) return;
+  if (el('auth-password').value.length < 6) {
+    setAuthMessage('Use a password with at least 6 characters.');
+    return;
+  }
+  submitAuth(async (email, password) => {
+    const { needsConfirmation } = await backend.signUp(email, password);
+    return needsConfirmation ? 'Account created. Check your email to confirm it, then sign in.' : null;
+  });
+});
+
+// ---------------- Starting up as admin or player ----------------
+
+const ROLE_CACHE = 'housey.role.';
+
+function wasAdmin(userId) {
+  try {
+    return localStorage.getItem(ROLE_CACHE + userId) === 'admin';
+  } catch {
+    return false;
+  }
+}
+
+function rememberRole(userId, value) {
+  try {
+    localStorage.setItem(ROLE_CACHE + userId, value);
+  } catch {
+    // storage unavailable: the role is simply looked up again next time
+  }
+}
+
+async function startAdmin() {
+  document.body.classList.remove('role-player');
+
+  let saved = null;
+  let published = null;
+  try {
+    [published, saved] = await Promise.all([backend.loadPublic(), backend.loadAdmin()]);
+  } catch {
+    syncOk.admin = false;
+    syncOk.public = false;
+    showToast("Couldn't load the saved game. You can keep going; it syncs when the connection is back.", 4500);
+  }
+
+  if (saved) {
+    game.restore({
+      tickets: saved.tickets || [],
+      rigs: saved.rigs || {},
+      decoyCount: saved.decoy_count ?? 2,
+      called: published?.called || [],
+      started: Boolean(published) && published.status !== 'setup',
+    });
+  }
+
+  el('decoy-count').value = String(game.decoyCount);
+  renderTicketList();
+  el('btn-start-game').disabled = game.tickets.length === 0;
+  renderSyncStatus();
+  showAiStatus();
+
+  if (game.started) {
+    renderBoard();
+    setMode('host');
+    showScreen('game');
+    renderAll();
+  } else {
+    showScreen('setup');
+  }
+}
+
+let playerLoaded = false;
+
+function applyPublicRow(row) {
+  const next = { status: row.status, called: row.called || [], wins: row.wins || {}, updatedAt: row.updated_at || null };
+  if (view.updatedAt && next.updatedAt && Date.parse(next.updatedAt) < Date.parse(view.updatedAt)) return;
+
+  const previous = view;
+  view = next;
+  renderPublic();
+
+  if (playerLoaded) {
+    if (next.called.length > previous.called.length) {
+      playBeep();
+      popBall();
+    }
+    Object.keys(next.wins).filter((key) => !previous.wins[key]).forEach((key) => {
+      playFanfare();
+      burstConfetti({ big: key === 'fullHouse' });
+      showToast(`${PRIZE_LABELS[key]}: ${next.wins[key].name} wins!`, 3000);
+    });
+  }
+  playerLoaded = true;
+}
+
+function startPlayer() {
+  document.body.classList.add('presentation', 'role-player');
+  showScreen('game');
+  // A player's page gets no admin controls at all, not just hidden ones.
+  document.querySelectorAll('.host-only, .mode-tabs, #screen-setup, #btn-new-game').forEach((node) => node.remove());
+  renderBoard();
+  renderPublic();
+  try {
+    backend.watchPublic(applyPublicRow, (healthy) => {
+      syncOk.public = healthy;
+      renderSyncStatus();
+    });
+  } catch {
+    syncOk.public = false;
+  }
+  renderSyncStatus();
+}
+
+async function init() {
+  let session = null;
+  try {
+    session = await backend.getSession();
+  } catch {
+    // the live service is unreachable: carry on as a guest
+  }
+
+  signedIn = Boolean(session);
+  el('btn-auth').textContent = signedIn ? 'Sign out' : 'Admin sign in';
+
+  if (session) {
+    try {
+      role = await backend.fetchRole(session.user.id);
+      rememberRole(session.user.id, role);
+    } catch {
+      role = wasAdmin(session.user.id) ? 'admin' : 'player';
+    }
+  }
+
+  if (role === 'admin') await startAdmin();
+  else startPlayer();
+}
+
+init();

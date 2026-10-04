@@ -1,7 +1,9 @@
-// POST /api/scan: reads the numbers off a Housie ticket photo with a vision
-// model on OpenRouter. The API key only ever exists here, as the Cloudflare
+// POST /api/scan (admin only): reads the numbers off a Housie ticket photo
+// with a vision model on OpenRouter. The API key only ever exists here, as the Cloudflare
 // secret OPENROUTER_API_KEY; the browser sends the photo to this endpoint and
 // never sees the key.
+
+import { SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY } from '../../js/config.js';
 
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const DEFAULT_MODELS = ['google/gemma-4-31b-it:free', 'qwen/qwen3.8-27b:free'];
@@ -129,15 +131,47 @@ export async function onRequestGet({ env }) {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-export async function onRequestPost({ request, env }) {
-  const apiKey = apiKeyFrom(env);
-  if (!apiKey) {
-    return json(503, { error: 'not_configured', message: 'AI scanning is not set up on this site.' });
+// Scanning spends the AI quota, so only the admin may do it. The caller's
+// Supabase token is sent to Supabase, which verifies it and answers whether
+// that user's role is admin (the same check the database policies use).
+// Resolves to null when allowed, otherwise { status, error, message }.
+async function denyUnlessAdmin(request) {
+  const header = request.headers.get('Authorization') || '';
+  const token = header.startsWith('Bearer ') ? header.slice(7).trim() : '';
+  if (!token) return { status: 401, error: 'unauthorized', message: 'Sign in as admin to scan tickets.' };
+
+  let res;
+  try {
+    res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/is_admin`, {
+      method: 'POST',
+      headers: { apikey: SUPABASE_PUBLISHABLE_KEY, Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: '{}',
+      signal: AbortSignal.timeout(8000),
+    });
+  } catch {
+    return { status: 502, error: 'auth_unavailable', message: "Couldn't check your sign-in right now. Try again." };
   }
 
+  if (res.status === 401) return { status: 401, error: 'unauthorized', message: 'Your sign-in has expired. Sign in again.' };
+  if (!res.ok) return { status: 502, error: 'auth_unavailable', message: "Couldn't check your sign-in right now. Try again." };
+
+  const isAdmin = await res.json().catch(() => false);
+  if (isAdmin !== true) return { status: 403, error: 'forbidden', message: 'Only the admin can scan tickets.' };
+  return null;
+}
+
+export async function onRequestPost({ request, env }) {
   const origin = request.headers.get('Origin');
   if (origin && new URL(origin).host !== new URL(request.url).host) {
     return json(403, { error: 'forbidden', message: 'Cross-site requests are not allowed.' });
+  }
+
+  const denied = await denyUnlessAdmin(request);
+  if (denied) return json(denied.status, { error: denied.error, message: denied.message });
+
+  const apiKey = apiKeyFrom(env);
+  if (!apiKey) {
+    return json(503, { error: 'not_configured', message: 'AI scanning is not set up on this site.' });
   }
 
   if (!(request.headers.get('Content-Type') || '').includes('application/json')) {

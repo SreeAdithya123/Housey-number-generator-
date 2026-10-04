@@ -563,3 +563,47 @@ footer.hint-footer {
   .caller { flex-direction: column; align-items: flex-start; }
   .caller-ball { width: 84px; height: 84px; font-size: 28px; }
 }
+
+/* ---------- Roles, sync status, sign-in ---------- */
+
+body.role-player .mode-tabs { display: none !important; }
+
+.sync {
+  font-size: 12px;
+  font-weight: 700;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.sync.ok { color: var(--green); border-color: rgba(52, 211, 153, 0.45); }
+.sync.warn { color: var(--host); border-color: rgba(245, 158, 11, 0.55); }
+
+.header-actions { align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgba(5, 6, 15, 0.75);
+}
+
+.auth-card { width: 100%; max-width: 380px; margin: 0; }
+
+.auth-card input {
+  width: 100%;
+  margin-bottom: 10px;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 10px;
+  padding: 12px;
+}
+
+.auth-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.auth-actions .btn-primary { flex: 1 1 100%; }
+.auth-actions .btn { flex: 1 1 auto; }

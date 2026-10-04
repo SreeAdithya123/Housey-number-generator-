@@ -16,13 +16,16 @@
 <meta name="apple-mobile-web-app-title" content="Housey">
 
 <link rel="stylesheet" href="css/styles.css">
+<script src="js/vendor/supabase.js"></script>
 </head>
 <body>
 <header class="app-header">
   <div class="brand"><span class="ball">H</span> Housey</div>
   <div class="header-actions">
+    <span id="sync-status" class="sync hidden" aria-live="polite"></span>
     <button id="btn-install" class="icon-btn hidden" type="button">Install app</button>
     <button id="btn-new-game" class="icon-btn hidden" type="button">New game</button>
+    <button id="btn-auth" class="icon-btn" type="button">Admin sign in</button>
   </div>
 </header>
 
@@ -75,7 +78,12 @@
       <button id="tab-presentation" type="button">Presentation mode</button>
     </div>
 
-    <div class="card">
+    <div id="waiting-card" class="card hidden">
+      <h2>Waiting for the host</h2>
+      <p class="hint">The game hasn't started yet. This page updates by itself, no need to refresh.</p>
+    </div>
+
+    <div class="card live-card">
       <div class="caller">
         <div id="caller-ball" class="caller-ball">–</div>
         <div class="caller-meta">
@@ -113,17 +121,17 @@
       <div id="forced-preview" class="forced-next hidden"></div>
     </div>
 
-    <div class="card">
+    <div class="card live-card">
       <h2>Prizes</h2>
       <div id="prize-tracker" class="prize-tracker"></div>
     </div>
 
-    <div class="card">
+    <div class="card live-card">
       <h2>Board</h2>
       <div id="board" class="board"></div>
     </div>
 
-    <div class="card">
+    <div class="card host-only">
       <h2>Tickets</h2>
       <div id="game-tickets" class="game-tickets"></div>
     </div>
@@ -131,6 +139,21 @@
 
   <footer class="hint-footer">Free, friendly-game tool only: no money or real prizes, please.</footer>
 </main>
+
+<div id="auth-overlay" class="overlay hidden">
+  <form id="auth-form" class="card auth-card">
+    <h2>Sign in</h2>
+    <p class="hint">Admins run the game. Players just watch, no account needed.</p>
+    <input id="auth-email" type="email" autocomplete="username" placeholder="Email" required>
+    <input id="auth-password" type="password" autocomplete="current-password" placeholder="Password" required>
+    <p id="auth-message" class="scan-note warn hidden"></p>
+    <div class="auth-actions">
+      <button id="auth-submit" type="submit" class="btn btn-primary">Sign in</button>
+      <button id="auth-signup" type="button" class="btn">Create player account</button>
+      <button id="auth-cancel" type="button" class="btn">Cancel</button>
+    </div>
+  </form>
+</div>
 
 <canvas id="confetti-canvas"></canvas>
 <div id="toast"></div>

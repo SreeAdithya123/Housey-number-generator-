@@ -9,6 +9,7 @@
 // than an empty grid.
 
 import { ROWS, COLS, gridFromRows, checkTicket } from './ticket-rules.js';
+import { accessToken } from './backend.js';
 
 const SCAN_ENDPOINT = 'api/scan';
 const AI_MAX_DIMENSION = 1600;
@@ -75,12 +76,20 @@ async function scanWithAi(canvas, onProgress) {
   const dataUrl = canvas.toDataURL('image/jpeg', 0.9);
   const image = dataUrl.slice(dataUrl.indexOf(',') + 1);
 
+  let token = null;
+  try {
+    token = await accessToken();
+  } catch {
+    // treated the same as being signed out
+  }
+  if (!token) throw new Error('Sign in as admin to scan tickets.');
+
   onProgress?.(0.2, 'Asking the AI to read the ticket…');
   let res;
   try {
     res = await fetch(SCAN_ENDPOINT, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
       body: JSON.stringify({ image, mediaType: 'image/jpeg' }),
       signal: AbortSignal.timeout(AI_TIMEOUT_MS),
     });

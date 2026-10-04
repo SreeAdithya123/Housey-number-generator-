@@ -119,6 +119,36 @@ export class Game {
     this.emit('game-reset');
   }
 
+  // Rebuilds a game that was saved earlier (tickets, armed fixes, settings and
+  // the numbers called so far) by replaying the calls, so wins and the
+  // remaining pool come out exactly as they were. The forced queue is not
+  // saved: it is recomputed on the next call from the armed fixes.
+  restore({ tickets = [], rigs = {}, decoyCount = 2, called = [], started = false }) {
+    this.tickets = tickets;
+    this.rigs = rigs;
+    this.decoyCount = decoyCount;
+
+    if (!started) {
+      this.started = false;
+      this.finished = false;
+      this.pool = [];
+      this.called = [];
+      this.calledSet = new Set();
+      this.wins = {};
+      this.forcedQueue = [];
+      return;
+    }
+
+    this.start();
+    called.forEach((num) => {
+      this.removeFromPool(num);
+      this.called.push(num);
+      this.calledSet.add(num);
+      this.evaluateWins();
+    });
+    this.finished = this.pool.length === 0;
+  }
+
   ticketMatched(ticket) {
     return ticket.numbers.filter((n) => this.calledSet.has(n));
   }
