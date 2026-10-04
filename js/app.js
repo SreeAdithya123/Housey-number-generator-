@@ -1,5 +1,5 @@
 import { Game, createTicket, makeId, PRIZE_ORDER, PRIZE_LABELS } from './game.js';
-import { scanTicketImage } from './ocr.js';
+import { scanTicketImage, checkAiScanner } from './ocr.js';
 import {
   buildEditableGrid, readGridFromDom, buildReadonlyGrid, escapeHtml,
   showToast, burstConfetti, playBeep, playFanfare,
@@ -28,7 +28,7 @@ function setMode(mode) {
   el('tab-presentation').classList.toggle('active', mode === 'presentation');
 }
 
-// ---------------- Setup screen: ticket upload + OCR ----------------
+// ---------------- Setup screen: ticket upload + scan ----------------
 
 function setProgress(frac, label) {
   el('ocr-progress-bar').style.width = `${Math.round(frac * 100)}%`;
@@ -48,21 +48,37 @@ function showScanNote(text, tone) {
   note.className = `scan-note ${tone}`;
 }
 
+const AI_STATUS = {
+  ready: ['ok', 'AI scanner is ready.'],
+  no_key: ['warn', 'AI scanner is deployed but has no API key. Add the OPENROUTER_API_KEY secret in Cloudflare, then redeploy.'],
+  not_deployed: ['warn', "AI scanner isn't available on this host (no /api/scan), so ticket numbers have to be typed in."],
+  offline: ['warn', "Couldn't reach the AI scanner. Check your connection."],
+};
+
+async function showAiStatus() {
+  const [tone, text] = AI_STATUS[await checkAiScanner()];
+  const status = el('ai-status');
+  status.textContent = text;
+  status.className = `scan-note ${tone}`;
+  status.style.marginTop = '12px';
+}
+
 function describeScan({ source, model, fallbackReason, flags, notes }) {
-  const parts = [];
-  if (source === 'ai') {
-    const label = model ? model.split('/').pop().replace(':free', '') : 'AI model';
-    parts.push(`Read by AI (${label}).`);
-  } else {
-    parts.push(`${fallbackReason} Used basic offline OCR instead, which often misreads numbers.`);
+  if (source !== 'ai') {
+    showScanNote(`${fallbackReason} Type the numbers from your ticket below, or tap Re-scan photo to try again.`, 'warn');
+    return;
   }
+
+  const parts = [];
+  const label = model ? model.split('/').pop().replace(':free', '') : 'AI model';
+  parts.push(`Read by AI (${label}).`);
   if (flags.length) {
     parts.push(flags.length === 1 ? '1 highlighted box looks wrong.' : `${flags.length} highlighted boxes look wrong.`);
   }
   parts.push(...notes);
   parts.push('Check every number against your ticket before saving.');
 
-  const clean = source === 'ai' && flags.length === 0 && notes.length === 0;
+  const clean = flags.length === 0 && notes.length === 0;
   showScanNote(parts.join(' '), clean ? 'ok' : 'warn');
 }
 
@@ -512,3 +528,4 @@ if ('serviceWorker' in navigator) {
 
 showScreen('setup');
 renderTicketList();
+showAiStatus();

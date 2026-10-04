@@ -222,12 +222,17 @@ main {
   border-radius: 6px;
   text-align: center;
   font-weight: 700;
-  font-size: clamp(11px, 2.6vw, 15px);
+  font-size: clamp(13px, 3.8vw, 18px);
   padding: 0;
   min-width: 0;
 }
 
-.ticket-cell.empty { background: transparent; }
+.ticket-grid.readonly .ticket-cell {
+  display: grid;
+  place-items: center;
+}
+
+.ticket-cell.empty { background: rgba(255, 255, 255, 0.04); }
 
 .ticket-cell.warn {
   background: rgba(245, 158, 11, 0.22);

@@ -8,8 +8,14 @@ const DEFAULT_MODELS = ['google/gemma-4-31b-it:free', 'qwen/qwen3.8-27b:free'];
 const ALLOWED_MEDIA_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
 const MAX_BODY_CHARS = 8_000_000;
 const MAX_IMAGE_CHARS = 6_000_000;
-const ATTEMPT_TIMEOUT_MS = 35_000;
+const ATTEMPT_TIMEOUT_MS = 25_000;
 const MAX_OUTPUT_TOKENS = 3000;
+// Free models are often throttled for a few seconds, so a fully throttled
+// round is retried after a short pause. The total stays well under the 100s
+// Cloudflare allows a request to take.
+const MAX_ROUNDS = 3;
+const RETRY_DELAY_MS = 1000;
+const TOTAL_BUDGET_MS = 55_000;
 
 const PROMPT = `This image shows ONE Tambola (Housie, 90-ball) ticket: a grid of 3 rows and 9 columns. Each row holds exactly 5 numbers (the other 4 cells are blank), so there are 15 numbers in total. All numbers are between 1 and 90, and inside a row they increase from left to right.
 
@@ -25,6 +31,12 @@ function json(status, body) {
     status,
     headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
   });
+}
+
+// A key pasted into a dashboard often carries a trailing newline or space,
+// which makes the Authorization header invalid.
+function apiKeyFrom(env) {
+  return (env.OPENROUTER_API_KEY || '').trim();
 }
 
 function modelList(env) {
@@ -109,8 +121,17 @@ const FAILURES = {
   unavailable: [502, 'The AI service is unavailable right now.'],
 };
 
+// GET /api/scan: lets the app (and you, in a browser) check that the function
+// is deployed and can see its key, without revealing the key or calling the AI.
+export async function onRequestGet({ env }) {
+  return json(200, { ok: true, configured: Boolean(apiKeyFrom(env)), models: modelList(env) });
+}
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 export async function onRequestPost({ request, env }) {
-  if (!env.OPENROUTER_API_KEY) {
+  const apiKey = apiKeyFrom(env);
+  if (!apiKey) {
     return json(503, { error: 'not_configured', message: 'AI scanning is not set up on this site.' });
   }
 
@@ -143,20 +164,30 @@ export async function onRequestPost({ request, env }) {
     return json(413, { error: 'too_large', message: 'That photo is too large.' });
   }
 
+  const started = Date.now();
   const failures = [];
-  for (const model of modelList(env)) {
-    const result = await askModel(model, image, mediaType, env.OPENROUTER_API_KEY);
-    if (result.ok) return json(200, { rows: result.rows, model: result.model });
+  for (let round = 0; round < MAX_ROUNDS; round++) {
+    const roundFailures = [];
+    for (const model of modelList(env)) {
+      if (Date.now() - started > TOTAL_BUDGET_MS) break;
+      const result = await askModel(model, image, mediaType, apiKey);
+      if (result.ok) return json(200, { rows: result.rows, model: result.model });
 
-    console.error('scan attempt failed:', result.detail);
-    if (result.kind === 'auth') {
-      const [status, message] = FAILURES.auth;
-      return json(status, { error: 'upstream_auth', message });
+      console.error('scan attempt failed:', result.detail);
+      if (result.kind === 'auth') {
+        const [status, message] = FAILURES.auth;
+        return json(status, { error: 'upstream_auth', message });
+      }
+      roundFailures.push(result.kind);
     }
-    failures.push(result.kind);
+    failures.push(...roundFailures);
+
+    const temporary = roundFailures.some((k) => k === 'rate_limited' || k === 'unavailable');
+    if (!temporary || round === MAX_ROUNDS - 1 || Date.now() - started > TOTAL_BUDGET_MS) break;
+    await sleep(RETRY_DELAY_MS * (round + 1));
   }
 
-  const kind = ['rate_limited', 'unreadable', 'unavailable'].find((k) => failures.includes(k));
+  const kind = ['rate_limited', 'unreadable', 'unavailable'].find((k) => failures.includes(k)) || 'unavailable';
   const [status, message] = FAILURES[kind];
   return json(status, { error: kind, message });
 }

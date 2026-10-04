@@ -10,11 +10,10 @@ can install to a home screen like a native app.
 
 1. **Scan tickets.** Upload or photograph each player's ticket. A vision AI
    model reads the 15 printed numbers into a digital 3x9 grid (see "AI ticket
-   scanning" below). If the AI is unavailable the app falls back to basic
-   offline OCR. Either way the grid is editable, and any box that breaks the
-   rules of a Housie ticket (wrong column, repeated number, a row without 5
-   numbers) is highlighted in amber. Always glance over the grid against the
-   paper ticket before saving.
+   scanning" below). Any box that breaks the rules of a Housie ticket (wrong
+   column, repeated number, a row without 5 numbers) is highlighted in amber.
+   If the AI is unavailable you get an empty grid and the reason, and type the
+   numbers in. Always check the grid against the paper ticket before saving.
 2. **Call numbers.** A big caller ball shows each number as it's drawn
    (1-90, no repeats), with a running history, a 1-90 board, and live
    highlighting of every ticket's matched numbers.
@@ -77,8 +76,26 @@ second one is used automatically when the first is rate limited, errors, or
 returns something unreadable. Any OpenRouter model that accepts images works.
 
 Free models share a pool of capacity across all OpenRouter users, so they are
-sometimes throttled. When every model fails, the app tells the host and falls
-back to the offline OCR below, which is much less accurate.
+sometimes throttled. A throttled request is retried a few times with short
+pauses, and the second model is tried each time. If everything still fails,
+the app says why and leaves an empty grid to type into. There is no
+on-device OCR fallback: it was measured at 1 of 15 numbers on a real ticket
+photo, and a plausible-looking wrong read is worse than an empty grid.
+
+### Checking that it is wired up
+
+The upload card shows a status line as soon as the page loads:
+
+| Status line | Meaning | Fix |
+| --- | --- | --- |
+| AI scanner is ready. | Function deployed and it can see the key | nothing |
+| deployed but has no API key | Function is live, secret missing for this environment | add `OPENROUTER_API_KEY` (Production, and Preview if you test on preview URLs), then redeploy |
+| isn't available on this host (no /api/scan) | The host has no Functions (for example GitHub Pages), or the deploy skipped `functions/` | use the Cloudflare Pages URL; check the build log says it compiled Functions |
+| Couldn't reach the AI scanner | You are offline | reconnect |
+
+You can also open `https://<your-site>/api/scan` in a browser. It returns
+`{"ok":true,"configured":true,...}` when everything is in place and never
+shows the key.
 
 ### Local development
 
@@ -92,8 +109,8 @@ npx wrangler pages dev .
 
 ## Running it
 
-Without AI scanning, any static file server works (the app then uses the
-offline OCR fallback):
+Without AI scanning, any static file server works (tickets then have to be
+typed in by hand):
 
 ```bash
 npx serve .
@@ -110,11 +127,12 @@ needs `http://` or `https://`.
 Deploy on **Cloudflare Pages** to get AI scanning: connect the repo, leave the
 build output as the repo root (`wrangler.toml` sets it), and add the secret
 described above. Static-only hosts such as GitHub Pages serve the app but not
-`/api/scan`, so they use the offline OCR fallback.
+`/api/scan`, so tickets there have to be typed in.
 
-**Whenever you change files the app loads** (anything under `js/`, `css/`,
-`index.html`), bump `CACHE_VERSION` in `sw.js`. Installed copies of the app
-serve cached files first and only pick up changes when that version changes.
+The service worker is network-first, so a new deployment is picked up on the
+next load; the cache only answers when the network is slow or gone. A phone
+that still has an older version installed may need two or three reloads (or
+"Clear & reset" in the browser's site settings) the first time.
 
 ### Installing it like a mobile app
 
@@ -132,49 +150,22 @@ Once it's served over `https://` (GitHub Pages works great for this):
 ```
 index.html        Markup for both screens (ticket setup + game)
 css/styles.css     All styling (mobile-first, dark theme)
-js/ocr.js          Ticket photo -> 3x9 grid: AI via /api/scan, Tesseract fallback
+js/ocr.js          Ticket photo -> 3x9 grid via /api/scan, plus the status check
 js/ticket-rules.js Housie ticket rules: place numbers by column, flag misreads
 functions/api/scan.js  Cloudflare Function: calls OpenRouter, holds the API key
 js/game.js         Draw pool, prize rules, the decoy-then-forced rig engine
 js/ui.js           DOM helpers: editable/readonly grids, toast, confetti, sound
 js/app.js          Wires everything together, screen/event handling
-js/vendor/tesseract/  Vendored OCR engine (see below) - not hand-edited
 manifest.json      PWA metadata (name, icons, standalone display)
-sw.js              Service worker: caches the app shell for fast/offline loads
+sw.js              Service worker: network-first, cached copy when offline or slow
 icons/             App icons (plus the source .svg files used to generate them)
-```
-
-## Vendored OCR engine (offline fallback)
-
-Used only when AI scanning is unavailable. `js/vendor/tesseract/` holds a
-local copy of everything Tesseract.js needs:
-the library itself, its web worker, a WASM OCR core (three variants, so the
-browser's own feature detection can pick the fastest one it supports), and
-the English trained-data file. These are copied as-is from the `tesseract.js`,
-`tesseract.js-core`, and `@tesseract.js-data/eng` npm packages (all
-Apache-2.0/MIT licensed) - vendored rather than loaded from a CDN at
-runtime, so ticket scanning keeps working even with a restrictive network
-policy or no network at all after the first load, and the app never depends
-on a third-party CDN's uptime. The large files here (a few WASM cores plus
-the trained-data file, around 15 MB total) are only fetched by the browser
-the first time someone actually scans a ticket, then cached by the service
-worker for every scan after that.
-
-To update these files later (e.g. a new Tesseract.js release):
-
-```bash
-npm install tesseract.js tesseract.js-core @tesseract.js-data/eng --prefix /tmp/tess-update
-cp /tmp/tess-update/node_modules/tesseract.js/dist/{tesseract.min.js,worker.min.js} js/vendor/tesseract/
-cp /tmp/tess-update/node_modules/tesseract.js-core/tesseract-core-*lstm.wasm.js js/vendor/tesseract/core/
-cp /tmp/tess-update/node_modules/@tesseract.js-data/eng/4.0.0_best_int/eng.traineddata.gz js/vendor/tesseract/lang-data/
 ```
 
 ## Known limitations
 
 - Scan accuracy depends on photo quality (flat, well-lit, in focus, one ticket
-  filling the frame). AI reads are far better than the offline OCR but are
-  not guaranteed, and the free OpenRouter models can be throttled at busy
-  times. Always check the scanned grid before saving a ticket.
+  filling the frame). AI reads are not guaranteed, and the free OpenRouter models can be
+  throttled at busy times. Always check the scanned grid before saving a ticket.
 - `/api/scan` is open to anyone who can reach the site and spends your
   OpenRouter quota. It only accepts same-site requests and small images, which
   stops casual abuse but is not real authentication.

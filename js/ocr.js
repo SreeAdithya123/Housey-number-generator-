@@ -1,48 +1,18 @@
-// Ticket scanning: turns a photo of a Housie/Tambola ticket into a 3 x 9 grid.
+// Ticket scanning: turns a photo of a Housie/Tambola ticket into a 3 x 9 grid
+// by sending it to /api/scan, a Cloudflare Function that asks a vision model
+// (via OpenRouter) to read the numbers. The API key lives only on the server.
 //
-// 1. Preferred: send the photo to /api/scan, a Cloudflare Function that asks a
-//    vision model (via OpenRouter) to read the numbers. The API key lives only
-//    on the server.
-// 2. Fallback: if that is unavailable (not configured, rate limited, offline),
-//    run Tesseract OCR in the browser. It works offline but misreads often, so
-//    the result is flagged for the host to double check.
-//
-// Either way the caller gets a grid plus the cells that look wrong, because
-// no automatic read of a phone photo can be trusted blindly.
+// If the scanner is unavailable (not deployed, no key, throttled, offline) the
+// caller gets an empty grid and the reason, so the host can type the numbers
+// in. There is deliberately no on-device OCR fallback: it was measured at 1 of
+// 15 numbers on a real ticket, and a plausible-looking wrong read is worse
+// than an empty grid.
 
 import { ROWS, COLS, gridFromRows, checkTicket } from './ticket-rules.js';
 
 const SCAN_ENDPOINT = 'api/scan';
 const AI_MAX_DIMENSION = 1600;
 const AI_TIMEOUT_MS = 75_000;
-
-// Everything Tesseract.js needs (main script, worker, WASM core, English
-// trained data) is vendored under js/vendor/tesseract instead of pulled from
-// a CDN at runtime: that keeps the app installable/offline-capable and
-// means the OCR step never depends on a third-party CDN being reachable.
-const VENDOR_BASE = 'js/vendor/tesseract';
-const TESSERACT_SCRIPT = `${VENDOR_BASE}/tesseract.min.js`;
-const WORKER_PATH = `${VENDOR_BASE}/worker.min.js`;
-const CORE_PATH = `${VENDOR_BASE}/core`;
-const LANG_PATH = `${VENDOR_BASE}/lang-data`;
-const OCR_MAX_DIMENSION = 1400;
-
-let tesseractLoadPromise = null;
-
-function loadTesseract() {
-  if (window.Tesseract) return Promise.resolve(window.Tesseract);
-  if (tesseractLoadPromise) return tesseractLoadPromise;
-
-  tesseractLoadPromise = new Promise((resolve, reject) => {
-    const script = document.createElement('script');
-    script.src = TESSERACT_SCRIPT;
-    script.onload = () => resolve(window.Tesseract);
-    script.onerror = () => reject(new Error('Could not load the OCR engine. Try reloading the page.'));
-    document.head.appendChild(script);
-  });
-
-  return tesseractLoadPromise;
-}
 
 function fileToImage(file) {
   return new Promise((resolve, reject) => {
@@ -71,7 +41,30 @@ function drawToCanvas(img, maxDimension) {
   return canvas;
 }
 
-// ---------------- AI scan ----------------
+function emptyGrid() {
+  return Array.from({ length: ROWS }, () => Array(COLS).fill(null));
+}
+
+/**
+ * Asks /api/scan whether it exists and can see its API key, without scanning.
+ * Resolves to 'ready', 'no_key', 'not_deployed' or 'offline'.
+ */
+export async function checkAiScanner() {
+  let res;
+  try {
+    res = await fetch(SCAN_ENDPOINT, { signal: AbortSignal.timeout(8000) });
+  } catch {
+    return 'offline';
+  }
+  let data = null;
+  try {
+    data = await res.json();
+  } catch {
+    // a host without the function answers with an HTML page or a 404
+  }
+  if (!res.ok || data?.ok !== true) return 'not_deployed';
+  return data.configured ? 'ready' : 'no_key';
+}
 
 function isRowsPayload(rows) {
   return Array.isArray(rows) && rows.length === ROWS
@@ -103,8 +96,9 @@ async function scanWithAi(canvas, onProgress) {
   }
 
   if (!res.ok) {
-    const notDeployed = [404, 405, 501].includes(res.status) || data?.error === 'not_configured';
-    throw new Error(notDeployed ? "AI scanning isn't set up on this site yet." : data?.message || 'The AI scan failed.');
+    if ([404, 405, 501].includes(res.status)) throw new Error("The AI scanner isn't deployed on this site (no /api/scan).");
+    if (data?.error === 'not_configured') throw new Error('The AI scanner has no API key on the server yet.');
+    throw new Error(data?.message || 'The AI scan failed.');
   }
   if (!isRowsPayload(data?.rows)) throw new Error('The AI scanner sent back something unexpected.');
 
@@ -112,99 +106,13 @@ async function scanWithAi(canvas, onProgress) {
   return { rows: data.rows, model: data.model };
 }
 
-// ---------------- Tesseract fallback ----------------
-
-function emptyGrid() {
-  return Array.from({ length: ROWS }, () => Array(COLS).fill(null));
-}
-
-function placeWord(grid, text, cx, cy, width, height) {
-  const value = parseInt(text.replace(/\D/g, ''), 10);
-  if (!Number.isFinite(value) || value < 1 || value > 90) return;
-
-  const row = Math.min(ROWS - 1, Math.max(0, Math.floor((cy / height) * ROWS)));
-  const col = Math.min(COLS - 1, Math.max(0, Math.floor((cx / width) * COLS)));
-
-  if (grid[row][col] == null) grid[row][col] = value;
-}
-
-function walkBlocksForWords(blocks) {
-  const words = [];
-  (blocks || []).forEach((block) => {
-    (block.paragraphs || []).forEach((para) => {
-      (para.lines || []).forEach((line) => {
-        (line.words || []).forEach((word) => {
-          if (word && word.text && word.bbox) words.push(word);
-        });
-      });
-    });
-  });
-  return words;
-}
-
-function gridFromWords(words, width, height) {
-  const grid = emptyGrid();
-  words.forEach((word) => {
-    const { x0, x1, y0, y1 } = word.bbox;
-    placeWord(grid, word.text, (x0 + x1) / 2, (y0 + y1) / 2, width, height);
-  });
-  return grid;
-}
-
-function gridFromPlainText(text) {
-  // No position data available: distribute numbers from each non-empty
-  // line left-to-right across the row they most likely belong to.
-  const grid = emptyGrid();
-  const lines = text.split('\n').map((l) => l.trim()).filter(Boolean);
-  const numericLines = lines.filter((l) => /\d/.test(l)).slice(0, ROWS);
-
-  numericLines.forEach((line, rowIdx) => {
-    const matches = (line.match(/\d{1,2}/g) || [])
-      .map((n) => parseInt(n, 10))
-      .filter((n) => n >= 1 && n <= 90);
-    const colStep = COLS / Math.max(matches.length, 1);
-    matches.forEach((value, i) => {
-      const col = Math.min(COLS - 1, Math.round(i * colStep));
-      if (grid[rowIdx][col] == null) grid[rowIdx][col] = value;
-    });
-  });
-
-  return grid;
-}
-
-async function scanWithTesseract(canvas, onProgress) {
-  onProgress?.(0.1, 'Loading the offline OCR engine…');
-  const Tesseract = await loadTesseract();
-
-  const worker = await Tesseract.createWorker('eng', 1, {
-    workerPath: WORKER_PATH,
-    corePath: CORE_PATH,
-    langPath: LANG_PATH,
-    logger: (m) => {
-      if (m.status === 'recognizing text' && typeof m.progress === 'number') {
-        onProgress?.(0.2 + m.progress * 0.75, 'Recognizing numbers…');
-      }
-    },
-  });
-
-  try {
-    await worker.setParameters({
-      tessedit_char_whitelist: '0123456789',
-      tessedit_pageseg_mode: '11', // sparse text: good fit for a grid of isolated numbers
-    });
-    const { data } = await worker.recognize(canvas, {}, { blocks: true, text: true });
-    const words = walkBlocksForWords(data.blocks);
-    return words.length ? gridFromWords(words, canvas.width, canvas.height) : gridFromPlainText(data.text || '');
-  } finally {
-    await worker.terminate();
-  }
-}
-
 /**
  * Scans a ticket photo. Resolves to
- *   { grid, source: 'ai' | 'ocr', model?, fallbackReason?, flags, notes }
+ *   { grid, source: 'ai' | 'none', model?, fallbackReason?, flags, notes }
  * where grid is 3x9 (null = blank), flags lists cells that look misread
- * ({ row, col, reason }) and notes are row-level warnings.
+ * ({ row, col, reason }) and notes are row-level warnings. source 'none'
+ * means the scan failed: grid is empty and fallbackReason says why.
+ * Rejects only if the file is not a readable image.
  * onProgress(fraction 0..1, label) is called as the scan proceeds.
  */
 export async function scanTicketImage(file, onProgress) {
@@ -212,21 +120,14 @@ export async function scanTicketImage(file, onProgress) {
   const { img, url } = await fileToImage(file);
 
   try {
-    let fallbackReason;
-    try {
-      const { rows, model } = await scanWithAi(drawToCanvas(img, AI_MAX_DIMENSION), onProgress);
-      const { grid, flags: placement } = gridFromRows(rows);
-      const { flags, notes } = checkTicket(grid, placement);
-      onProgress?.(1, 'Done');
-      return { grid, source: 'ai', model, flags, notes };
-    } catch (err) {
-      fallbackReason = err.message;
-    }
-
-    const grid = await scanWithTesseract(drawToCanvas(img, OCR_MAX_DIMENSION), onProgress);
-    const { flags, notes } = checkTicket(grid);
+    const { rows, model } = await scanWithAi(drawToCanvas(img, AI_MAX_DIMENSION), onProgress);
+    const { grid, flags: placement } = gridFromRows(rows);
+    const { flags, notes } = checkTicket(grid, placement);
     onProgress?.(1, 'Done');
-    return { grid, source: 'ocr', fallbackReason, flags, notes };
+    return { grid, source: 'ai', model, flags, notes };
+  } catch (err) {
+    onProgress?.(1, 'Done');
+    return { grid: emptyGrid(), source: 'none', fallbackReason: err.message, flags: [], notes: [] };
   } finally {
     URL.revokeObjectURL(url);
   }

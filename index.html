@@ -39,6 +39,8 @@
         <input id="file-input" type="file" accept="image/*">
       </div>
 
+      <p id="ai-status" class="scan-note hidden" style="margin-top:12px;"></p>
+
       <div id="ocr-progress" class="ocr-progress hidden">
         <span id="ocr-progress-label">Reading image…</span>
         <div class="bar"><div id="ocr-progress-bar"></div></div>
@@ -49,7 +51,7 @@
           <input id="ticket-name-input" type="text" placeholder="Player name (e.g. Priya)">
         </div>
         <p id="scan-note" class="scan-note hidden"></p>
-        <div id="scan-grid" class="ticket-grid"></div>
+        <div id="scan-grid"></div>
         <p class="hint" style="margin-top:10px;">Tap any box to fix a misread number. Leave blanks empty.</p>
         <div class="ticket-card-actions">
           <button id="btn-rescan" class="btn btn-sm" type="button">Re-scan photo</button>
