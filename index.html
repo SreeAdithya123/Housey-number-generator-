@@ -93,17 +93,11 @@
       </div>
 
       <div class="call-controls host-only">
-        <button id="btn-call-next" class="btn btn-primary" type="button">Call next number</button>
         <button id="btn-undo" class="btn" type="button">Undo</button>
-        <div class="spacer"></div>
-        <label class="auto-call-control">
-          <input type="checkbox" id="chk-auto-call"> Auto-call every
-          <select id="auto-call-rate">
-            <option value="2000">2s</option>
-            <option value="3000" selected>3s</option>
-            <option value="5000">5s</option>
-          </select>
-        </label>
+      </div>
+
+      <div class="call-controls player-only">
+        <button id="btn-generate-next" class="btn btn-primary btn-block" type="button">Generate number</button>
       </div>
     </div>
 
@@ -121,12 +115,12 @@
       <div id="forced-preview" class="forced-next hidden"></div>
     </div>
 
-    <div class="card live-card">
+    <div class="card live-card admin-only">
       <h2>Prizes</h2>
       <div id="prize-tracker" class="prize-tracker"></div>
     </div>
 
-    <div class="card live-card">
+    <div class="card live-card admin-only">
       <h2>Board</h2>
       <div id="board" class="board"></div>
     </div>
@@ -143,7 +137,7 @@
 <div id="auth-overlay" class="overlay hidden">
   <form id="auth-form" class="card auth-card">
     <h2>Sign in</h2>
-    <p class="hint">Admins run the game. Players just watch, no account needed.</p>
+    <p class="hint">Admins run the game. Players generate the numbers, no account needed.</p>
     <input id="auth-email" type="email" autocomplete="username" placeholder="Email" required>
     <input id="auth-password" type="password" autocomplete="current-password" placeholder="Password" required>
     <p id="auth-message" class="scan-note warn hidden"></p>

@@ -363,16 +363,6 @@ main {
   align-items: center;
 }
 
-.call-controls .spacer { flex: 1; }
-
-.auto-call-rate {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 13px;
-  color: var(--text-dim);
-}
-
 /* Number board 1-90 */
 
 .board {
@@ -521,9 +511,15 @@ main {
 
 /* Presentation mode: hide host panel, go fullscreen-friendly */
 
-body.presentation .host-only { display: none !important; }
+body.presentation .host-only,
+body.presentation .admin-only { display: none !important; }
 body.presentation main { max-width: 1100px; }
 body.presentation .caller-ball { width: 130px; height: 130px; font-size: 46px; }
+
+/* The generate button is a player action: hidden for admin, shown for players */
+
+.call-controls.player-only { display: none; }
+body.role-player .call-controls.player-only { display: flex; }
 
 /* Toast */
 

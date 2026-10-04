@@ -15,15 +15,18 @@ can install to a home screen like a native app.
    If the AI is unavailable you get an empty grid and the reason, and type the
    numbers in. Always check the grid against the paper ticket before saving.
 2. **Call numbers.** A big caller ball shows each number as it's drawn
-   (1-90, no repeats), with a running history, a 1-90 board, and live
-   highlighting of every ticket's matched numbers.
+   (1-90, no repeats), with a running history. Tapping **Generate number** is
+   what actually draws it - see "Two roles" below for who does that.
 3. **Track prizes.** Early Five, Top Line, Middle Line, Bottom Line, and Full
    House are detected automatically and announced with confetti and a sound
-   cue as soon as any ticket satisfies them.
-4. **Two roles.** The **admin** runs everything: tickets, scanning, calling
-   numbers, the host controls. **Players** just open the link and watch the
-   presentation view (caller, prizes, board) live on their own phones, with no
-   tickets and no controls. See "Roles and the backend" below.
+   cue as soon as any ticket satisfies them, on the admin's screen.
+4. **Two roles.** The **admin** runs everything: tickets, scanning, the host
+   controls, and watches the board and prizes. **Players** just open the
+   link - no account needed - and get one thing: a **Generate number**
+   button that draws the next number for everyone (the admin's screen, and
+   every other player's history, update live). Players see nothing else: no
+   board, no prizes, no tickets, no host controls. See "Roles and the
+   backend" below.
 
 ## The "fixed winner" feature - read this before using it
 
@@ -49,12 +52,14 @@ unmodified random draw on its own.
 
 ## Roles and the backend (Supabase)
 
-| | Admin | Player (guest or signed in) |
+| | Admin | Player (anyone with the link) |
 | --- | --- | --- |
-| Caller, prizes, board, live | yes | yes |
+| Generate the next number | no | **yes** |
+| Caller ball and history | yes | yes |
+| Prizes, board | yes | **no** |
 | Tickets and their numbers | yes | **no** |
 | Host controls, armed prizes | yes | **no** |
-| Scan tickets, start, call, undo, new game | yes | no |
+| Scan tickets, undo, start, new game | yes | no |
 | How they get in | signs in with email and password | opens the link, nothing to sign in |
 
 The game is stored in a Supabase project, and the **database itself** enforces
@@ -62,22 +67,28 @@ the table above (row level security), so it holds even though the project URL
 and publishable key in `js/config.js` are public:
 
 - `game_public`: status, numbers called, prize winners. Anyone can read it
-  (players update live over Supabase Realtime), only an admin can change it.
+  (everyone watches live over Supabase Realtime). The admin can change it
+  directly (undo, start, new game); drawing the *next* number instead goes
+  through `call_next_number()`, a database function anyone can call (no
+  sign-in) that reads tickets/rigs internally but never returns them.
 - `game_admin`: tickets, armed prizes, settings. Only an admin can read or
-  change it. It is not published to the live channel.
+  change it directly. It is not published to the live channel, and
+  `call_next_number()` is the only thing besides the admin that ever reads it.
 - `profiles`: each signed-in user's role. Nobody can change a role through the
   API, not even an admin; you promote the admin once with the SQL below.
 
-Players never receive tickets or the armed prize, only the numbers that were
-called and who won. The code in this repository is public, so the *feature*
-is visible to anyone who reads it; the *configuration* (which ticket is armed)
-is not.
+Players never receive tickets or the armed prize - they don't even see the
+board or who won, only the numbers as they draw them. The code in this
+repository is public, so the *feature* is visible to anyone who reads it; the
+*configuration* (which ticket is armed) is not.
 
 ### One-time setup
 
 1. **Run the SQL.** Supabase dashboard -> SQL Editor -> New query -> paste all
-   of `supabase/migrations/20261004000000_roles_and_game_state.sql` -> Run. It
-   is safe to run again.
+   of `supabase/migrations/20261004000000_roles_and_game_state.sql` -> Run,
+   then do the same with `20261004170000_player_call_next_number.sql` (this
+   one is what lets a player's tap actually draw the next number). Both are
+   safe to run again.
 2. **Create your admin account.** Dashboard -> Authentication -> Users -> Add
    user -> Create new user, enter your email and a password, tick **Auto
    Confirm User**.
@@ -230,11 +241,11 @@ css/styles.css     All styling (mobile-first, dark theme)
 js/ocr.js          Ticket photo -> 3x9 grid via /api/scan, plus the status check
 js/ticket-rules.js Housie ticket rules: place numbers by column, flag misreads
 functions/api/scan.js  Cloudflare Function: calls OpenRouter, holds the API key
-js/game.js         Draw pool, prize rules, the decoy-then-forced rig engine, restore
-js/backend.js      Supabase: sign in, role, public/admin game state, live updates
+js/game.js         Prize rules, the decoy-then-forced rig engine, admin-side restore/undo
+js/backend.js      Supabase: sign in, role, public/admin game state, live updates, call_next_number
 js/config.js       Public Supabase URL and publishable key (no secrets here)
 js/vendor/supabase.js  Local copy of supabase-js (MIT), no CDN
-supabase/migrations/   The SQL that creates roles, tables and security rules
+supabase/migrations/   The SQL that creates roles, tables, security rules, and call_next_number()
 .mcp.json          Supabase MCP server config for Claude Code
 js/ui.js           DOM helpers: editable/readonly grids, toast, confetti, sound
 js/app.js          Wires everything together, screen/event handling
@@ -250,5 +261,8 @@ icons/             App icons (plus the source .svg files used to generate them)
   throttled at busy times. Always check the scanned grid before saving a ticket.
 - `/api/scan` only works for a signed-in admin (the function asks Supabase
   whether the caller's token belongs to an admin before using any AI quota).
-- Players need an internet connection to follow along live; there is one game
-  at a time; two simultaneous admins would overwrite each other.
+- Players need an internet connection to generate numbers; there is one game
+  at a time. Multiple players tapping Generate at once is fine (the database
+  serializes it, no duplicate or skipped numbers), but a player tapping at the
+  exact moment the admin hits Undo is last-write-wins, same as two
+  simultaneous admins would overwrite each other.

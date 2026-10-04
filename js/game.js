@@ -220,41 +220,6 @@ export class Game {
     }
   }
 
-  canCallNext() {
-    return this.started && !this.finished && this.pool.length > 0;
-  }
-
-  callNext() {
-    if (!this.canCallNext()) return null;
-
-    let num;
-    let forcedPrizeKey = null;
-    const inDecoyPhase = this.called.length < this.decoyCount;
-
-    if (!inDecoyPhase) this.refillForcedQueue();
-
-    if (!inDecoyPhase && this.forcedQueue.length > 0) {
-      const next = this.forcedQueue.shift();
-      num = next.number;
-      forcedPrizeKey = next.prizeKey;
-      this.removeFromPool(num);
-    } else {
-      const idx = Math.floor(Math.random() * this.pool.length);
-      num = this.pool[idx];
-      this.pool.splice(idx, 1);
-    }
-
-    this.called.push(num);
-    this.calledSet.add(num);
-
-    const newWins = this.evaluateWins();
-    if (this.pool.length === 0) this.finished = true;
-
-    const result = { number: num, forced: forcedPrizeKey, newWins, finished: this.finished };
-    this.emit('number-called', result);
-    return result;
-  }
-
   undoLast() {
     if (this.called.length === 0) return;
     const num = this.called.pop();

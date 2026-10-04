@@ -9,14 +9,15 @@ import {
 const game = new Game();
 let currentFile = null;
 let currentScanGridEl = null;
-let autoTimer = null;
 
-// 'admin' runs the game and sees everything. 'player' (a signed-in non-admin
-// or a guest) only watches: the caller, prizes and board, never tickets.
+// 'admin' runs the game and sees everything: tickets, prizes, board, host
+// controls. 'player' (a signed-in non-admin or a guest) only generates
+// numbers for the shared draw and sees the caller ball and history, nothing else.
 let role = 'player';
 
-// What the caller, board and prize tracker draw, for both roles: the admin's
-// own game turned into this shape, a player's copy of the public database row.
+// What the caller (both roles), board and prize tracker (admin only) draw:
+// the admin's own game turned into this shape, a player's copy of the public
+// database row.
 let view = { status: 'setup', called: [], wins: {}, updatedAt: null };
 
 const el = (id) => document.getElementById(id);
@@ -310,9 +311,12 @@ function renderBoard() {
 }
 
 function updateBoard() {
+  // Not in a player's DOM: only the admin ever sees the board.
+  const board = el('board');
+  if (!board) return;
   const current = view.called[view.called.length - 1];
   const called = new Set(view.called);
-  el('board').querySelectorAll('.num').forEach((cell) => {
+  board.querySelectorAll('.num').forEach((cell) => {
     const n = Number(cell.dataset.n);
     cell.classList.toggle('called', called.has(n));
     cell.classList.toggle('current', n === current);
@@ -322,7 +326,9 @@ function updateBoard() {
 // ---------------- Prize tracker ----------------
 
 function renderPrizeTracker() {
+  // Not in a player's DOM: only the admin ever sees the prize tracker.
   const container = el('prize-tracker');
+  if (!container) return;
   container.innerHTML = '';
   PRIZE_ORDER.forEach((prizeKey) => {
     const badge = document.createElement('div');
@@ -404,76 +410,33 @@ function popBall() {
 
 // ---------------- Call controls ----------------
 
-function doCallNext() {
-  const result = game.callNext();
-  if (!result) {
-    stopAutoCall();
-    showToast(game.finished ? 'All 90 numbers have been called.' : 'Start the game first.');
-    return;
-  }
-
-  playBeep();
-  renderAll();
-  popBall();
-  syncPublic();
-
-  result.newWins.forEach(({ prizeKey, ticket }) => {
-    playFanfare();
-    burstConfetti({ big: prizeKey === 'fullHouse' });
-    showToast(`${PRIZE_LABELS[prizeKey]}: ${ticket.name} wins!`, 3000);
-  });
-
-  if (result.finished) {
-    stopAutoCall();
-    showToast('Board complete: all 90 numbers called.', 3000);
-  }
-}
-
-el('btn-call-next').addEventListener('click', doCallNext);
-
+// Drawing numbers forward is a player action (backend.callNextNumber, a
+// database RPC with its own access to rigs/tickets); the admin only corrects
+// with Undo, which still runs locally since it needs the admin's own tickets.
 el('btn-undo').addEventListener('click', () => {
-  stopAutoCall();
   game.undoLast();
   renderAll();
   syncPublic();
 });
 
-el('chk-auto-call').addEventListener('change', (e) => {
-  if (e.target.checked) startAutoCall(); else stopAutoCall();
-});
-
-el('auto-call-rate').addEventListener('change', () => {
-  if (el('chk-auto-call').checked) {
-    stopAutoCall(true);
-    startAutoCall();
+el('btn-generate-next').addEventListener('click', async () => {
+  const btn = el('btn-generate-next');
+  btn.disabled = true;
+  try {
+    const result = await backend.callNextNumber();
+    if (result?.reason === 'not_running') showToast('Waiting for the host to start the game.');
+    else if (result?.reason === 'finished') showToast('All 90 numbers have been called.');
+  } catch (err) {
+    showToast(err.message || 'Could not generate a number. Check your connection.');
+  } finally {
+    btn.disabled = false;
   }
 });
-
-function startAutoCall() {
-  stopAutoCall(true);
-  const rate = parseInt(el('auto-call-rate').value, 10);
-  autoTimer = setInterval(() => {
-    if (!game.canCallNext()) {
-      stopAutoCall();
-      return;
-    }
-    doCallNext();
-  }, rate);
-}
-
-function stopAutoCall(keepChecked = false) {
-  if (autoTimer) {
-    clearInterval(autoTimer);
-    autoTimer = null;
-  }
-  if (!keepChecked) el('chk-auto-call').checked = false;
-}
 
 // ---------------- New game ----------------
 
 el('btn-new-game').addEventListener('click', () => {
   if (!window.confirm('Start a brand new game? This clears all tickets and the current draw.')) return;
-  stopAutoCall();
   game.reset();
   game.tickets = [];
   renderTicketList();
@@ -520,7 +483,6 @@ function renderAll() {
   renderGameTickets();
   renderRigRows();
   renderForcedPreview();
-  el('btn-call-next').disabled = !game.canCallNext();
 }
 
 // ---------------- PWA install prompt ----------------
@@ -755,6 +717,47 @@ async function startAdmin() {
   } else {
     showScreen('setup');
   }
+
+  // Players (anyone with the link) draw the numbers now, so the admin needs
+  // its own live feed too: replay each incoming called list through the same
+  // local engine Undo already uses, keeping board/prizes/forced-preview and
+  // rig "won by" tags in sync with whoever is actually calling.
+  try {
+    backend.watchPublic(applyAdminPublicRow, (healthy) => {
+      syncOk.public = healthy;
+      renderSyncStatus();
+    });
+  } catch {
+    syncOk.public = false;
+  }
+}
+
+function applyAdminPublicRow(row) {
+  if (!row || row.status === 'setup' || !game.started) return;
+
+  const previousCalledCount = game.called.length;
+  const previousWins = { ...game.wins };
+
+  game.restore({
+    tickets: game.tickets,
+    rigs: game.rigs,
+    decoyCount: game.decoyCount,
+    called: row.called || [],
+    started: true,
+  });
+
+  renderAll();
+
+  if (game.called.length > previousCalledCount) {
+    playBeep();
+    popBall();
+  }
+  Object.keys(game.wins).filter((key) => !previousWins[key]).forEach((prizeKey) => {
+    const ticket = game.tickets.find((t) => t.id === game.wins[prizeKey].ticketId);
+    playFanfare();
+    burstConfetti({ big: prizeKey === 'fullHouse' });
+    showToast(`${PRIZE_LABELS[prizeKey]}: ${ticket ? ticket.name : 'Unknown'} wins!`, 3000);
+  });
 }
 
 let playerLoaded = false;
@@ -784,9 +787,9 @@ function applyPublicRow(row) {
 function startPlayer() {
   document.body.classList.add('presentation', 'role-player');
   showScreen('game');
-  // A player's page gets no admin controls at all, not just hidden ones.
-  document.querySelectorAll('.host-only, .mode-tabs, #screen-setup, #btn-new-game').forEach((node) => node.remove());
-  renderBoard();
+  // A player's page gets no admin controls, board, prizes or tickets at all,
+  // not just hidden ones: generating numbers is all a player can do.
+  document.querySelectorAll('.host-only, .admin-only, .mode-tabs, #screen-setup, #btn-new-game').forEach((node) => node.remove());
   renderPublic();
   try {
     backend.watchPublic(applyPublicRow, (healthy) => {

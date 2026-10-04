@@ -84,6 +84,13 @@ async function writeRow(table, payload) {
 export const publishPublic = (payload) => writeRow('game_public', payload);
 export const saveAdmin = (payload) => writeRow('game_admin', payload);
 
+/** Draws the next number for the shared game. Resolves to { ok, reason?, number? }. */
+export async function callNextNumber() {
+  const { data, error } = await getClient().rpc('call_next_number');
+  if (error) throw friendly(error);
+  return data;
+}
+
 /**
  * Calls onRow(row) whenever the public game state changes (live), plus on
  * reconnect, when the tab becomes visible again and every 15 seconds as a
